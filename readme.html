@@ -1,0 +1,151 @@
+﻿<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Read Me</title>
+  <link rel="stylesheet" href="https://stackedit.io/style.css" />
+</head>
+
+<body class="stackedit">
+  <div class="stackedit__html"><h2 id="setup-lambda-function-for-s3-files-to-mysql-database">Setup Lambda Function for S3 Files to Mysql Database Load</h2>
+<p>To illustrate the example, we need below aws resources created before creating the function, make sure you have proper permissions to create AWS resources,</p>
+<ol>
+<li>Create VPC network or use the default VPC in the region. (Will be using the Default VPC in the Region)</li>
+<li>Create VPC endpoints for SSM and S3 and attach the VPC created above or VPC your are using with subnets and route table.</li>
+<li>Create MySQL RDS database with IAM DB Authentication.</li>
+<li>Create role with specific policy to access the S3, IAM Authentication for RDS and lambda execution role.</li>
+<li>Create a source bucket for CSV files.</li>
+<li>Create Parameter in SSM Parameter Store.</li>
+<li>Creating the lambda layer for python library.</li>
+</ol>
+<h2 id="create-vpc-endpoints">Create VPC Endpoints</h2>
+<ol>
+<li>
+<p>Create VPC Endpoints to access the AWS services in private which are out of the VPC network,</p>
+<pre><code> aws ec2 modify-vpc-attribute --enable-dns-hostnames  --vpc-id &lt;VPC-ID&gt; 
+ aws ec2 modify-vpc-attribute --enable-dns-support  --vpc-id &lt;VPC-ID&gt; 
+ aws ec2 create-vpc-endpoint --vpc-id &lt;VPC-ID&gt; --service-name com.amazonaws.&lt;aws-region&gt;.ssm  --vpc-endpoint-type Interface --subnet-ids &lt;vpc_subnets&gt;
+ aws ec2 create-vpc-endpoint --vpc-id &lt;VPC-ID&gt; --service-name com.amazonaws.&lt;aws-region&gt;.s3  --vpc-endpoint-type Gateway --route-table-ids &lt;vpc_route_table&gt;
+</code></pre>
+</li>
+</ol>
+<h2 id="create-rds-mysql-database">Create RDS MySQL Database:</h2>
+<ol>
+<li>
+<p>Execute the below command to create the database,</p>
+<pre><code> aws rds create-db-instance --db-name mysql_db --db-instance-identifier  mysql-dev --engine mysql --db-instance-class db.m5.large --master-username admin --master-user-password admin123 --engine-version 8.0.16  --publicly-accessible --no-multi-az --enable-iam-database-authentication --allocated-storage 40 
+</code></pre>
+</li>
+<li>
+<p>Since the database creates on the default VPC, update the security group with port access that’s attached to DB.</p>
+</li>
+<li>
+<p>Update the security group assigned to DB instance to allow 3306 port and use this security group while creating the lambda function.</p>
+</li>
+<li>
+<p>Login to mysql and execute below commands to create user with IAM Authentication and grant permission with create, select and insert.</p>
+<pre><code> CREATE USER {dbusername} IDENTIFIED WITH AWSAuthenticationPlugin as 'RDS';
+ GRANT CREATE ON *.* TO '{dbusername}'@'%';
+ GRANT INSERT ON *.* TO '{dbusername}'@'%';
+ GRANT SELECT ON *.* TO '{dbusername}'@'%';
+</code></pre>
+</li>
+<li>
+<p>Create a database schema and table in the database and use the info in the parameter store. (Optional)</p>
+</li>
+</ol>
+<h2 id="create-roles-in-iam-for-executing-of-lambda-and-s3-access-with-rds">Create Roles in IAM for executing of lambda and s3 access with RDS:</h2>
+<ol>
+<li>
+<p>Create Policy which allows access to below with set of permissions to allow,<br>
+a. S3 - Read, Write<br>
+b. RDS Connection Permission - Connect (Update the Resource with DB Resource id from RDS Created)<br>
+c. SSM Parameter Store - Read, List<br>
+d. Cloud watch logs - Create, write<br>
+e. VPC Network Services - Create, List, Delete</p>
+<pre><code> aws iam create-policy --policy-name policy_lambda --policy-document file:///policies_role.json
+</code></pre>
+</li>
+<li>
+<p>Create a role for lambda execution with permission show in file.</p>
+<pre><code> aws iam create-role --role-name execute_role_lambda --assume-role-policy-document file:///role.json
+</code></pre>
+</li>
+<li>
+<p>Attach Policy to role,</p>
+<pre><code> aws iam attach-role-policy --role-name execute_role_lambda --policy-arn arn:aws:iam::&lt;aws_account_id&gt;:policy/&lt;role_name&gt;
+</code></pre>
+</li>
+</ol>
+<h2 id="create-bucket-for-source-files">Create Bucket for Source Files:</h2>
+<ol>
+<li>
+<p>Execute below command to create the bucket,</p>
+<pre><code> aws s3api create-bucket --bucket &lt;bucket-name&gt; --create-bucket-configuration LocationConstraint=&lt;aws-region&gt;
+</code></pre>
+</li>
+<li>
+<p>Assign the bucket policy to restrict the access of bucket to certain roles,(Update the bucket name and roles that need access to bucket)</p>
+<pre><code> aws s3api put-bucket-policy --bucket &lt;bucket-name&gt; --policy file://bucket_policy.json
+</code></pre>
+</li>
+</ol>
+<h2 id="create-ssm-parameter-for-lambda-connection-and-config-info">Create SSM Parameter for lambda connection and config info:</h2>
+<ol>
+<li>
+<p>Create parameter in AWS Parameter store with below structure with name RDS_Mysql_Secrects (If you choose other name, make changes in the lambda_function code),<br>
+<code>{ 		 "dbType": "DB Type", 		 "host": "DB Host Address", 		 "username": "DB User Name", 		 "port": "DB Port", 		 "service_db": "Database Connection service Name", 		 "mysql_schema": "Mysql Schema Name", 		 "mysql_tbl": "Mysql table name", 		 "archiveBucket": "Archive Bucket Name", 		 "archivePath": "Archive Path" 		 }</code></p>
+<pre><code>aws ssm put-parameter --name RDS_Mysql_Secrects --type String --value "{'dbType': 'DB Type','host': 'DB Host Address','username': 'DB User Name','port': 'DB Port','service_db': 'Database Connection service Name','mysql_schema': 'Mysql Schema Name','mysql_tbl': 'Mysql table name','archiveBucket': 'Archive Bucket Name','archivePath': 'Archive Path'}"
+</code></pre>
+</li>
+</ol>
+<h2 id="creating-lambda-layer-for-python-lib">Creating Lambda Layer for Python Lib:</h2>
+<ol>
+<li>Create Lambda layer for creating the environment (this layer consists of the packages/dependencies that to perform python task)
+<ol>
+<li>
+<p>Download the Python library from <a href="https://public-data-analytics.s3.us-east-2.amazonaws.com/lambda_layers_lib/python_lib_lambda.zip">https://public-data-analytics.s3.us-east-2.amazonaws.com/lambda_layers_lib/python_lib_lambda.zip</a></p>
+</li>
+<li>
+<p>Upload the library to S3 bucket and execute below command,</p>
+<pre><code> aws lambda publish-layer-version --layer-name python_lib --description "My Python layer" --content S3Bucket=&lt;bucket-name&gt;,S3Key=&lt;python-lib-key&gt; --compatible-runtimes python3.6 python3.7
+</code></pre>
+</li>
+<li>
+<p>Once the layer is created make a note of the layer arn created, we will be using it in creating the lambda function.</p>
+</li>
+</ol>
+</li>
+</ol>
+<h2 id="creating-the-lambda-function-and-assigning-the-s3-file-event-trigger">Creating the Lambda Function and assigning the s3 file event trigger:</h2>
+<ol>
+<li>
+<p>Zip the below files to create lambda function,</p>
+<ol>
+<li>lambda_function.py</li>
+<li><a href="http://Ops.py">Ops.py</a></li>
+<li>rds-combined-ca-bundle.pem</li>
+</ol>
+</li>
+<li>
+<p>Execute below command to create lambda function with in a VPC,</p>
+<pre><code> aws lambda create-function --function-name loadS3FilestoMysql --runtime python3.7 --zip-file fileb://&lt;code_zip_file_path&gt; --handler lambda_function.lambda_handler --role arn:aws:iam::&lt;aws_account_id&gt;:role/&lt;aws_role_id&gt; --layers &lt;layer arn&gt; --timeout 600 --vpc-config SubnetIds=&lt;vpc-subnets&gt;,SecurityGroupIds=&lt;vpc-secuirty-group&gt;
+</code></pre>
+<p>Use role, layer created before and subnets and security group that are allocated to RDS instance. This will give the private access to RDS resource with VPC.</p>
+</li>
+<li>
+<p>Create the event trigger rule in s3 to lambda, execute below command,</p>
+<pre><code> aws s3api put-bucket-notification-configuration --bucket &lt;bucket-name&gt; --notification-configuration file://s3_notification.json 
+</code></pre>
+</li>
+</ol>
+<h2 id="trigger-the-lambda-function-on-s3-file-create-event">Trigger the Lambda function on S3 File create event:</h2>
+<ol>
+<li>Place a csv file in the bucket path you have mentioned in the put bucket notification configuration.</li>
+</ol>
+</div>
+</body>
+
+</html>

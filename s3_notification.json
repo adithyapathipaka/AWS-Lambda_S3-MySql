@@ -1,0 +1,25 @@
+{
+    "LambdaFunctionConfigurations": [
+        {
+            "Id": "<lambda-function-name>",
+            "LambdaFunctionArn": "arn:aws:lambda:<aws-region>:<aws-account-id>:function:<lambda-function-name>",
+            "Events": [
+                "s3:ObjectCreated:*"
+            ],
+            "Filter": {
+                "Key": {
+                    "FilterRules": [
+                        {
+                            "Name": "Prefix",
+                            "Value": "source_csv_files/"
+                        },
+                        {
+                            "Name": "Suffix",
+                            "Value": ".csv"
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}
